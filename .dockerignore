@@ -1,0 +1,12 @@
+.git
+.gitignore
+.venv
+.vs
+.vscode
+.pytest_cache
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+!.env.example
+README.md

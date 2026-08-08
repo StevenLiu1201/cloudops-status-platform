@@ -4,7 +4,7 @@
 
 CloudOps Status Platform is a deliberately small FastAPI service built as a hands-on Cloud and DevOps portfolio project. The application stays simple so the repository can focus on containerization, automated testing, infrastructure, deployment, networking, security, and observability.
 
-The application is deployed manually to AWS: a Dockerized FastAPI service runs on Amazon EC2 and connects to Amazon RDS for PostgreSQL in private subnets. GitHub Actions automatically tests the API and builds its Docker image on pushes and pull requests to `main`. Deployment automation, dedicated CloudWatch configuration, and Terraform are planned but are not implemented yet.
+The application is deployed manually to AWS: a Dockerized FastAPI service runs on Amazon EC2 and connects to Amazon RDS for PostgreSQL in private subnets. CloudWatch centralizes application logs and monitors EC2 CPU with an SNS-integrated alarm. GitHub Actions automatically tests the API and builds its Docker image on pushes and pull requests to `main`. Deployment automation and Terraform are planned but are not implemented yet.
 
 ## Current architecture
 
@@ -16,6 +16,10 @@ flowchart LR
     API -->|"PostgreSQL :5432"| RDSSG["RDS security group"]
     RDSSG --> RDS[("Amazon RDS PostgreSQL<br/>private subnets")]
     SSM["AWS Systems Manager"] -->|"IAM-authenticated session<br/>no inbound SSH"| EC2
+    API -->|"awslogs driver"| Logs["CloudWatch Logs<br/>7-day retention"]
+    EC2 --> Metrics["CloudWatch CPU metric"]
+    Metrics --> Alarm["High CPU alarm"]
+    Alarm --> SNS["Amazon SNS email notification"]
 ```
 
 The EC2 instance is in a public subnet and is managed through AWS Systems Manager without an inbound SSH rule or key pair. RDS is not publicly accessible and accepts PostgreSQL traffic only from the EC2 security group. The local Docker Compose environment remains available for development.
@@ -39,6 +43,8 @@ The EC2 instance is in a public subnet and is managed through AWS Systems Manage
 | Amazon VPC | Custom public/private subnet and routing design |
 | AWS IAM | Administrator group and EC2 Systems Manager role |
 | AWS Systems Manager | Keyless instance administration without inbound SSH |
+| Amazon CloudWatch | Centralized API logs, EC2 CPU metrics, and alarm state tracking |
+| Amazon SNS | Email notification for the high-CPU alarm |
 
 ## API endpoints
 
@@ -202,8 +208,19 @@ The real `.env` file is excluded from Git and the Docker build context. Only `.e
 - EC2 administration uses an IAM role and Systems Manager instead of SSH keys.
 - EC2 requires IMDSv2 and does not expose port 22.
 - The deployed application uses a non-administrative PostgreSQL role.
+- The EC2 role can write only to the `/cloudops/api` CloudWatch log group.
+- Application logs expire after seven days to limit storage cost.
 
-The current cloud deployment is a learning environment rather than a production system. It uses source-IP-restricted HTTP on port 8000 and a root-readable EC2 environment file. Production deployment will require HTTPS, managed secrets, a stable ingress layer, image scanning, and expanded monitoring.
+The current cloud deployment is a learning environment rather than a production system. It uses source-IP-restricted HTTP on port 8000 and a root-readable EC2 environment file. Production deployment will require HTTPS, managed secrets, a stable ingress layer, image scanning, and more complete application-level metrics.
+
+## Monitoring validation
+
+- Docker's `awslogs` driver sends FastAPI and Uvicorn output to `/cloudops/api`.
+- The log group uses a seven-day retention policy.
+- An EC2 `CPUUtilization` alarm evaluates two consecutive five-minute datapoints against a 70% threshold.
+- Amazon SNS sends email when the alarm enters `ALARM`.
+- A controlled CPU load test validated the complete `OK → ALARM → OK` lifecycle while the API and RDS connection remained healthy.
+- The first load test reached only approximately 50% CPU and did not trigger the alarm. Increasing the controlled workload and allowing two complete metric periods produced the expected alarm transition, demonstrating the effect of metric aggregation and evaluation periods.
 
 ## AWS deployment
 
@@ -217,15 +234,14 @@ flowchart LR
     GitHub --> Actions["GitHub Actions<br/>CI implemented; CD planned"]
     Actions -.->|"manual deployment today"| EC2["Amazon EC2<br/>implemented"]
     EC2 --> RDS["Amazon RDS PostgreSQL<br/>implemented private database"]
-    EC2 -.-> CloudWatch["Amazon CloudWatch<br/>planned logs and alarms"]
+    EC2 --> CloudWatch["Amazon CloudWatch<br/>implemented logs and alarms"]
     Terraform["Terraform<br/>planned after manual AWS deployment"] -.-> EC2
     Terraform -.-> RDS
 ```
 
 Planned stages include:
 
-1. CloudWatch logs, metrics, and alarms
-2. GitHub Actions continuous delivery using AWS OpenID Connect
-3. Reproducible infrastructure with Terraform
+1. GitHub Actions continuous delivery using AWS OpenID Connect
+2. Reproducible infrastructure with Terraform
 
 Kubernetes, EKS, Prometheus, Grafana, feature flags, and additional security scanning are later improvements, not current capabilities.

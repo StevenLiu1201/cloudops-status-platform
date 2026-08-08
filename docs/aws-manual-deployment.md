@@ -31,6 +31,9 @@ flowchart TB
 
     IGW --> EC2SG
     SSM["AWS Systems Manager"] -->|"IAM role; outbound HTTPS"| EC2
+    EC2 -->|"CPUUtilization"| Alarm["CloudWatch alarm"]
+    EC2 -->|"Docker awslogs"| Logs["CloudWatch Logs"]
+    Alarm --> SNS["SNS email notification"]
 ```
 
 ## AWS resources
@@ -49,6 +52,9 @@ flowchart TB
 | `cloudops-api-ec2` | Runs the Dockerized FastAPI application |
 | `cloudops-db-subnet-group` | Restricts RDS placement to the private subnets |
 | `cloudops-postgres` | Managed PostgreSQL database without public access |
+| `/cloudops/api` | Centralized FastAPI and Uvicorn logs with seven-day retention |
+| `cloudops-ec2-high-cpu` | Alarm for sustained EC2 CPU at or above 70% |
+| `cloudops-alerts` | SNS topic for alarm email notifications |
 
 ## Security decisions
 
@@ -62,6 +68,7 @@ flowchart TB
 - Database credentials are not committed to Git or copied into the Docker image.
 - The EC2 runtime environment file is owned by root with mode `600`.
 - The FastAPI process runs as the non-root `app` user inside its container.
+- A scoped EC2 role policy allows log writes only to `/cloudops/api`.
 
 ## Deployment process
 
@@ -90,6 +97,15 @@ The deployment intentionally does not use Docker Compose on EC2 because PostgreS
 - `/health`, `/api/status`, `/api/version`, `/api/database-status`, and `/docs` were reachable through the EC2 public address from the authorized client IP.
 - `/api/database-status` confirmed live connectivity to RDS.
 - After an EC2 reboot, Docker, the API container, its health check, and the RDS connection recovered successfully.
+- FastAPI startup and request logs were delivered through Docker's `awslogs` driver to CloudWatch Logs.
+- A controlled CPU test caused two consecutive five-minute datapoints to exceed 70%, moved the alarm from `OK` to `ALARM`, and delivered an SNS email.
+- Stopping the load returned CPU to baseline and moved the alarm from `ALARM` back to `OK`; API and RDS health checks continued to pass.
+
+## Monitoring and troubleshooting exercise
+
+The first controlled load test raised EC2 CPU to only approximately 50%, so the alarm correctly remained `OK`. Inspection of the alarm graph showed that the configured condition required two datapoints above 70% within ten minutes. A second bounded test used enough workers to saturate both vCPUs and remained active for two complete metric periods. The alarm then entered `ALARM` and sent its SNS notification.
+
+After the workers were stopped, the metric graph fell immediately while the alarm briefly remained in `ALARM`. This was expected because metric ingestion and alarm evaluation are asynchronous. The next evaluation changed the state back to `OK`. This exercise demonstrated threshold selection, evaluation periods, missing/partial datapoints, notification delivery, and recovery verification.
 
 ## Operations
 
@@ -113,6 +129,7 @@ The container was started with `--restart unless-stopped`, and the Docker servic
 - RDS storage autoscaling, Multi-AZ, RDS Proxy, cross-Region backups, advanced Database Insights, and Enhanced Monitoring are disabled.
 - No NAT Gateway, load balancer, Elastic IP, or customer-managed KMS key is used.
 - RDS backup retention is limited to one day.
+- CloudWatch application logs expire after seven days.
 - EC2 and RDS deletion protection reduce accidental deletion but must be disabled during intentional cleanup.
 
 Budgets are alerts rather than hard spending limits, and AWS billing data can be delayed. Running resources must still be reviewed and stopped or removed when they are no longer needed.
@@ -123,7 +140,6 @@ Budgets are alerts rather than hard spending limits, and AWS billing data can be
 - The EC2 public IPv4 address can change after a stop/start cycle.
 - The deployment is manual and currently runs a single EC2 instance and Single-AZ database.
 - Runtime secrets use a root-readable EC2 file rather than a managed secret service.
-- Application logs are local to the container and are not yet centralized.
 - CI validates tests and the Docker build but does not deploy to AWS.
 
-Planned improvements include HTTPS, CloudWatch logs and alarms, GitHub Actions CD using AWS OpenID Connect, managed secrets, and reproducible Terraform infrastructure.
+Planned improvements include HTTPS, GitHub Actions CD using AWS OpenID Connect, managed secrets, application-level metrics, and reproducible Terraform infrastructure.

@@ -1,21 +1,24 @@
 # CloudOps Status Platform
 
+[![CI Pipeline](https://github.com/StevenLiu1201/cloudops-status-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/StevenLiu1201/cloudops-status-platform/actions/workflows/ci.yml)
+
 CloudOps Status Platform is a deliberately small FastAPI service built as a hands-on Cloud and DevOps portfolio project. The application stays simple so the repository can focus on containerization, automated testing, infrastructure, deployment, networking, security, and observability.
 
-The current implementation runs FastAPI and PostgreSQL as health-checked Docker containers. CI/CD, AWS, CloudWatch, and Terraform are planned but are not implemented yet.
+The application is deployed manually to AWS: a Dockerized FastAPI service runs on Amazon EC2 and connects to Amazon RDS for PostgreSQL in private subnets. GitHub Actions automatically tests the API and builds its Docker image on pushes and pull requests to `main`. Deployment automation, dedicated CloudWatch configuration, and Terraform are planned but are not implemented yet.
 
 ## Current architecture
 
 ```mermaid
 flowchart LR
-    User["User / API client"] -->|"HTTP :8000"| API["FastAPI container"]
-    API -->|"PostgreSQL :5432<br/>internal Docker network"| DB["PostgreSQL container"]
-    DB --> Volume[("postgres_data volume")]
-    Compose["Docker Compose"] -.->|"builds and manages"| API
-    Compose -.->|"creates and manages"| DB
+    User["Authorized API client"] -->|"HTTP :8000<br/>source IP restricted"| EC2SG["EC2 security group"]
+    EC2SG --> EC2["Amazon EC2<br/>Amazon Linux 2023"]
+    EC2 --> API["Dockerized FastAPI"]
+    API -->|"PostgreSQL :5432"| RDSSG["RDS security group"]
+    RDSSG --> RDS[("Amazon RDS PostgreSQL<br/>private subnets")]
+    SSM["AWS Systems Manager"] -->|"IAM-authenticated session<br/>no inbound SSH"| EC2
 ```
 
-Only the API port is published to the host. PostgreSQL is reachable from the API through the private Compose network and is not published on a host port.
+The EC2 instance is in a public subnet and is managed through AWS Systems Manager without an inbound SSH rule or key pair. RDS is not publicly accessible and accepts PostgreSQL traffic only from the EC2 security group. The local Docker Compose environment remains available for development.
 
 ## Implemented technologies
 
@@ -30,6 +33,12 @@ Only the API port is published to the host. PostgreSQL is reachable from the API
 | pytest | Automated endpoint tests |
 | Docker | Reproducible application image |
 | Docker Compose | API and database orchestration |
+| GitHub Actions | Automated tests and Docker image builds |
+| Amazon EC2 | Hosts the Dockerized API on Amazon Linux 2023 |
+| Amazon RDS | Managed PostgreSQL database in private subnets |
+| Amazon VPC | Custom public/private subnet and routing design |
+| AWS IAM | Administrator group and EC2 Systems Manager role |
+| AWS Systems Manager | Keyless instance administration without inbound SSH |
 
 ## API endpoints
 
@@ -188,30 +197,35 @@ The real `.env` file is excluded from Git and the Docker build context. Only `.e
 - PostgreSQL has no published host port in the Compose environment.
 - The API container runs as a non-root Linux user.
 - API and database services use health checks.
+- The AWS database is deployed without public access across two private subnets.
+- The RDS security group accepts PostgreSQL only from the EC2 security group.
+- EC2 administration uses an IAM role and Systems Manager instead of SSH keys.
+- EC2 requires IMDSv2 and does not expose port 22.
+- The deployed application uses a non-administrative PostgreSQL role.
 
-The Compose environment is intended for local development. Production deployment will require managed secrets, restricted cloud networking, HTTPS, least-privilege IAM, image scanning, and monitored infrastructure.
+The current cloud deployment is a learning environment rather than a production system. It uses source-IP-restricted HTTP on port 8000 and a root-readable EC2 environment file. Production deployment will require HTTPS, managed secrets, a stable ingress layer, image scanning, and expanded monitoring.
 
-## Planned cloud architecture
+## AWS deployment
 
-The next major implementation stages will add CI and an initial AWS deployment before introducing Kubernetes.
+The manual AWS implementation and its verification steps are documented in [docs/aws-manual-deployment.md](docs/aws-manual-deployment.md).
+
+## Delivery roadmap
 
 ```mermaid
 flowchart LR
     Developer["Developer"] --> GitHub["GitHub repository"]
-    GitHub --> Actions["GitHub Actions<br/>planned"]
-    Actions --> EC2["Amazon EC2<br/>planned"]
-    EC2 --> RDS["Amazon RDS PostgreSQL<br/>planned private database"]
-    EC2 --> CloudWatch["Amazon CloudWatch<br/>planned logs and metrics"]
+    GitHub --> Actions["GitHub Actions<br/>CI implemented; CD planned"]
+    Actions -.->|"manual deployment today"| EC2["Amazon EC2<br/>implemented"]
+    EC2 --> RDS["Amazon RDS PostgreSQL<br/>implemented private database"]
+    EC2 -.-> CloudWatch["Amazon CloudWatch<br/>planned logs and alarms"]
     Terraform["Terraform<br/>planned after manual AWS deployment"] -.-> EC2
     Terraform -.-> RDS
 ```
 
 Planned stages include:
 
-1. GitHub Actions continuous integration
-2. Manual AWS deployment using VPC networking, EC2, RDS, IAM, and security groups
-3. CloudWatch logs, metrics, and alarms
-4. GitHub Actions continuous delivery using AWS OpenID Connect
-5. Reproducible infrastructure with Terraform
+1. CloudWatch logs, metrics, and alarms
+2. GitHub Actions continuous delivery using AWS OpenID Connect
+3. Reproducible infrastructure with Terraform
 
 Kubernetes, EKS, Prometheus, Grafana, feature flags, and additional security scanning are later improvements, not current capabilities.

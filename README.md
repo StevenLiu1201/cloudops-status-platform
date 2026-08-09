@@ -2,49 +2,55 @@
 
 [![CI Pipeline](https://github.com/StevenLiu1201/cloudops-status-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/StevenLiu1201/cloudops-status-platform/actions/workflows/ci.yml)
 
-CloudOps Status Platform is a deliberately small FastAPI service built as a hands-on Cloud and DevOps portfolio project. The application stays simple so the repository can focus on containerization, automated testing, infrastructure, deployment, networking, security, and observability.
+CloudOps Status Platform is a small FastAPI service I built to practise the full path from local development to a working AWS deployment. The API itself is intentionally simple; the main focus of the project is Docker, continuous integration, AWS networking, database access, IAM, logging, monitoring, and operational verification.
 
-The application is deployed manually to AWS: a Dockerized FastAPI service runs on Amazon EC2 and connects to Amazon RDS for PostgreSQL in private subnets. CloudWatch centralizes application logs and monitors EC2 CPU with an SNS-integrated alarm. GitHub Actions automatically tests the API and builds its Docker image on pushes and pull requests to `main`. Deployment automation and Terraform are planned but are not implemented yet.
+The current AWS deployment runs the API in Docker on Amazon EC2 and connects it to a private Amazon RDS PostgreSQL database. I created the infrastructure manually first so I could understand and test each network and security relationship before reproducing it with Terraform.
 
-## Current architecture
+## Architecture
 
 ```mermaid
 flowchart LR
-    User["Authorized API client"] -->|"HTTP :8000<br/>source IP restricted"| EC2SG["EC2 security group"]
-    EC2SG --> EC2["Amazon EC2<br/>Amazon Linux 2023"]
-    EC2 --> API["Dockerized FastAPI"]
-    API -->|"PostgreSQL :5432"| RDSSG["RDS security group"]
-    RDSSG --> RDS[("Amazon RDS PostgreSQL<br/>private subnets")]
-    SSM["AWS Systems Manager"] -->|"IAM-authenticated session<br/>no inbound SSH"| EC2
-    API -->|"awslogs driver"| Logs["CloudWatch Logs<br/>7-day retention"]
-    EC2 --> Metrics["CloudWatch CPU metric"]
-    Metrics --> Alarm["High CPU alarm"]
-    Alarm --> SNS["Amazon SNS email notification"]
+    Client["Authorized API client"]
+    EC2SG["EC2 security group"]
+    EC2["Amazon EC2"]
+    API["Dockerized FastAPI"]
+    RDSSG["RDS security group"]
+    RDS["Private RDS PostgreSQL"]
+    SSM["Systems Manager"]
+    Logs["CloudWatch Logs"]
+    Metrics["CloudWatch CPU metric"]
+    Alarm["High CPU alarm"]
+    SNS["SNS email notification"]
+
+    Client -->|HTTP 8000| EC2SG
+    EC2SG --> EC2
+    SSM --> EC2
+    EC2 --> API
+    API -->|PostgreSQL 5432| RDSSG
+    RDSSG --> RDS
+    API --> Logs
+    EC2 --> Metrics
+    Metrics --> Alarm
+    Alarm --> SNS
 ```
 
-The EC2 instance is in a public subnet and is managed through AWS Systems Manager without an inbound SSH rule or key pair. RDS is not publicly accessible and accepts PostgreSQL traffic only from the EC2 security group. The local Docker Compose environment remains available for development.
+The EC2 instance is in a public subnet, but access to the API is restricted by source IP. The database is in private subnets and accepts PostgreSQL traffic only from the EC2 security group. I administer the instance through AWS Systems Manager Session Manager, so the EC2 security group does not expose SSH port 22.
 
-## Implemented technologies
+## What is implemented
 
-| Technology | Current use |
-| --- | --- |
-| Python 3.12 | Application runtime |
-| FastAPI | REST API and interactive OpenAPI documentation |
-| Uvicorn | ASGI development and container server |
-| PostgreSQL 18 | Persistent application database |
-| SQLAlchemy | Database engine, sessions, and model mapping |
-| Psycopg | PostgreSQL driver |
-| pytest | Automated endpoint tests |
-| Docker | Reproducible application image |
-| Docker Compose | API and database orchestration |
-| GitHub Actions | Automated tests and Docker image builds |
-| Amazon EC2 | Hosts the Dockerized API on Amazon Linux 2023 |
-| Amazon RDS | Managed PostgreSQL database in private subnets |
-| Amazon VPC | Custom public/private subnet and routing design |
-| AWS IAM | Administrator group and EC2 Systems Manager role |
-| AWS Systems Manager | Keyless instance administration without inbound SSH |
-| Amazon CloudWatch | Centralized API logs, EC2 CPU metrics, and alarm state tracking |
-| Amazon SNS | Email notification for the high-CPU alarm |
+- FastAPI endpoints for service health, status, version, and database connectivity
+- PostgreSQL persistence through SQLAlchemy and Psycopg
+- A non-root Docker image with an application health check
+- Docker Compose for local API and PostgreSQL development
+- Automated endpoint tests with pytest
+- GitHub Actions CI for tests and Docker image builds
+- A custom AWS VPC with public and private subnets across two Availability Zones
+- Amazon EC2 for the API and private Amazon RDS for PostgreSQL
+- IAM roles and Systems Manager Session Manager for keyless EC2 administration
+- CloudWatch Logs for container output with seven-day retention
+- A CloudWatch CPU alarm connected to an Amazon SNS email notification
+
+Terraform and automated AWS deployment are not part of the current implementation.
 
 ## API endpoints
 
@@ -56,20 +62,20 @@ The EC2 instance is in a public subnet and is managed through AWS Systems Manage
 | `GET` | `/api/database-status` | Runs a query to verify PostgreSQL connectivity |
 | `GET` | `/docs` | Opens the interactive OpenAPI documentation |
 
-## Quick start with Docker
+## Run locally with Docker
 
 ### Prerequisites
 
 - Docker Desktop with Docker Compose
-- PowerShell for the commands shown below
+- PowerShell for the commands below
 
-Clone the repository, move into its root directory, and create a local configuration file:
+Clone the repository and create the local configuration file:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and replace the placeholder Docker database password:
+Set a local database password in `.env`:
 
 ```text
 POSTGRES_DB=cloudops_status
@@ -83,32 +89,7 @@ Build and start the environment:
 docker compose up --build
 ```
 
-Open <http://127.0.0.1:8000/docs> or test the health endpoints listed above.
-
-Compose waits for PostgreSQL to become healthy before starting FastAPI. The API entrypoint initializes the schema and then starts Uvicorn.
-
-Stop the environment while retaining its database volume:
-
-```powershell
-docker compose down
-```
-
-## Verification and troubleshooting
-
-Show container health and published ports:
-
-```powershell
-docker compose ps
-```
-
-Follow API or database logs:
-
-```powershell
-docker compose logs -f api
-docker compose logs -f db
-```
-
-Call every API endpoint:
+Open <http://127.0.0.1:8000/docs>, or call the API directly:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
@@ -117,66 +98,99 @@ Invoke-RestMethod http://127.0.0.1:8000/api/version
 Invoke-RestMethod http://127.0.0.1:8000/api/database-status
 ```
 
-Run the automated tests inside the API container:
+Run the test suite inside the API container:
 
 ```powershell
 docker compose exec api python -m pytest backend/tests -v
 ```
 
-Confirm that the database table exists:
+Stop the environment while retaining the database volume:
 
 ```powershell
-docker compose exec db psql -U cloudops_app -d cloudops_status -c "\dt"
+docker compose down
 ```
 
-The named `postgres_data` volume persists database files when containers are replaced. `docker compose down --volumes` permanently removes that local containerized data and should only be used when a clean database is intentional.
+Docker Compose waits for PostgreSQL to become healthy before starting the API. The API entrypoint initializes the database schema and then starts Uvicorn. The named `postgres_data` volume keeps local database files when the containers are replaced.
 
-## Native Python and PostgreSQL setup
+## Project evidence
 
-Docker is the recommended path, but the API can also use PostgreSQL installed directly on the host.
+### Continuous integration
 
-Create and activate a Python virtual environment:
+The GitHub Actions workflow runs the Python tests and builds the Docker image on pushes and pull requests to `main`.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r backend\requirements.txt
-Copy-Item .env.example .env
-```
+![Successful GitHub Actions workflow runs](docs/images/github-actions-success.png)
 
-Set `DATABASE_URL` in `.env` to the application user's local PostgreSQL connection URL:
+### Runtime and database health
 
-```text
-DATABASE_URL=postgresql+psycopg://USERNAME:PASSWORD@localhost:5432/DATABASE
-```
+After deployment, the container health check reported `healthy`. The API health and status endpoints responded successfully, and `/api/database-status` confirmed the live connection to private RDS PostgreSQL.
 
-Initialize the schema and start the API:
+![Docker container and API health checks](docs/images/runtime-health-checks.png)
 
-```powershell
-python -m backend.app.init_db
-python -m uvicorn backend.app.main:app --reload
-```
+### Alarm trigger and recovery
 
-Run the local test suite:
+A bounded CPU load test produced two consecutive datapoints above the 70% threshold and moved the CloudWatch alarm into `ALARM`.
 
-```powershell
-python -m pytest backend\tests -v
-```
+![CloudWatch CPU alarm in ALARM state](docs/images/cloudwatch-alarm-triggered.png)
 
-## Environment variables
+After the workload stopped and CloudWatch evaluated the next datapoint, the alarm returned to `OK`.
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `APP_NAME` | `cloudops-api` | Service name returned by `/api/status` |
-| `APP_VERSION` | `1.0.0` | Version returned by `/api/version` |
-| `APP_ENVIRONMENT` | `development` | Runtime environment returned by `/api/status` |
-| `DATABASE_URL` | None | SQLAlchemy connection URL used outside Compose |
-| `POSTGRES_DB` | `cloudops_status` | Database initialized by the PostgreSQL container |
-| `POSTGRES_USER` | `cloudops_app` | Application database user initialized by the container |
-| `POSTGRES_PASSWORD` | Required | Local container database password |
+![CloudWatch CPU alarm recovered to OK](docs/images/cloudwatch-alarm-recovered.png)
 
-The real `.env` file is excluded from Git and the Docker build context. Only `.env.example`, containing placeholders, belongs in source control. Database passwords, AWS credentials, API keys, and tokens must never be committed.
+## AWS deployment record
+
+I documented the AWS resources, manual deployment process, security decisions, cost controls, and operational commands in [docs/aws-manual-deployment.md](docs/aws-manual-deployment.md).
+
+The deployment was verified by checking that:
+
+- EC2 passed its status checks and Systems Manager connected without SSH or a key pair.
+- The RDS endpoint resolved to a private `10.x.x.x` address from EC2.
+- PostgreSQL port 5432 was reachable from EC2 through security-group-to-security-group access.
+- The application authenticated with a restricted database role rather than the RDS master identity.
+- The Docker container reported `running` and `healthy`.
+- All API endpoints responded and `/api/database-status` confirmed the RDS connection.
+- Docker, the container health check, and the database connection recovered after an EC2 reboot.
+- FastAPI startup and request logs appeared in CloudWatch Logs.
+- A controlled CPU test moved the CloudWatch alarm from `OK` to `ALARM`, sent an SNS email, and returned to `OK` after the load stopped.
+
+## Problems I ran into
+
+### Private subnet placement
+
+I initially created both private subnets in the same Availability Zone. I caught the issue while checking the network configuration, deleted the second subnet, and recreated it in `ca-central-1b` before creating the RDS subnet group.
+
+### Database credentials in the connection URL
+
+The application password contained characters that needed to be encoded before being placed in the SQLAlchemy connection URL. I captured the password without echoing it in the terminal, URL-encoded it, stored the runtime configuration in a root-owned file on EC2, and removed the temporary shell variables.
+
+### CloudWatch alarm timing
+
+My first load test raised CPU to only about 50%, so the alarm correctly remained in `OK`. The alarm required two consecutive five-minute datapoints above 70%. I reviewed the graph and evaluation settings, ran a bounded workload long enough to produce two complete datapoints, and then verified the `OK` to `ALARM` to `OK` lifecycle.
+
+The metric dropped before the alarm returned to `OK`. This was expected because CloudWatch metric ingestion and alarm evaluation are asynchronous.
+
+## Security and cost choices
+
+- RDS has no public access and its subnets have no internet route.
+- The RDS security group accepts port 5432 only from the EC2 security group.
+- EC2 uses Systems Manager instead of an SSH key pair or an inbound port 22 rule.
+- IMDSv2 is required on the EC2 instance.
+- The API runs as a non-root user inside its container.
+- The deployed API authenticates with a non-administrative PostgreSQL role.
+- Runtime credentials are excluded from Git and stored in a root-readable EC2 file.
+- The EC2 logging policy is scoped to the `/cloudops/api` log group.
+- The deployment avoids a NAT Gateway, load balancer, Elastic IP, RDS Proxy, and Multi-AZ database to control cost.
+- CloudWatch logs expire after seven days, and an AWS Budget provides billing alerts.
+
+## Current limitations and next steps
+
+This is a portfolio-scale learning deployment rather than a production platform. It currently uses one EC2 instance, a Single-AZ database, source-IP-restricted HTTP on port 8000, manual deployment, and a root-readable environment file for runtime secrets.
+
+The next improvements I would make are:
+
+1. Reproduce the infrastructure with Terraform.
+2. Add GitHub Actions deployment using AWS OpenID Connect instead of long-lived access keys.
+3. Add HTTPS and a stable ingress layer.
+4. Move runtime credentials to a managed secret service.
 
 ## Project structure
 
@@ -188,60 +202,12 @@ The real `.env` file is excluded from Git and the Docker build context. Only `.e
 |   |-- Dockerfile           # API image definition
 |   |-- entrypoint.sh        # Schema initialization and Uvicorn startup
 |   `-- requirements.txt     # Python dependencies
-|-- compose.yaml             # API, PostgreSQL, network, health checks, and volume
-|-- .dockerignore            # Files excluded from Docker build context
-|-- .env.example             # Safe configuration template
-|-- .gitignore               # Local files excluded from Git
+|-- docs/
+|   |-- images/              # Sanitized project evidence
+|   `-- aws-manual-deployment.md
+|-- compose.yaml             # Local API, PostgreSQL, health checks, and volume
+|-- .env.example             # Safe local configuration template
 `-- README.md
 ```
 
-## Security choices
-
-- The application uses a dedicated PostgreSQL user instead of the `postgres` administrator.
-- Database credentials come from runtime environment variables and are not copied into the image.
-- The real `.env` file is excluded from both Git and Docker builds.
-- PostgreSQL has no published host port in the Compose environment.
-- The API container runs as a non-root Linux user.
-- API and database services use health checks.
-- The AWS database is deployed without public access across two private subnets.
-- The RDS security group accepts PostgreSQL only from the EC2 security group.
-- EC2 administration uses an IAM role and Systems Manager instead of SSH keys.
-- EC2 requires IMDSv2 and does not expose port 22.
-- The deployed application uses a non-administrative PostgreSQL role.
-- The EC2 role can write only to the `/cloudops/api` CloudWatch log group.
-- Application logs expire after seven days to limit storage cost.
-
-The current cloud deployment is a learning environment rather than a production system. It uses source-IP-restricted HTTP on port 8000 and a root-readable EC2 environment file. Production deployment will require HTTPS, managed secrets, a stable ingress layer, image scanning, and more complete application-level metrics.
-
-## Monitoring validation
-
-- Docker's `awslogs` driver sends FastAPI and Uvicorn output to `/cloudops/api`.
-- The log group uses a seven-day retention policy.
-- An EC2 `CPUUtilization` alarm evaluates two consecutive five-minute datapoints against a 70% threshold.
-- Amazon SNS sends email when the alarm enters `ALARM`.
-- A controlled CPU load test validated the complete `OK → ALARM → OK` lifecycle while the API and RDS connection remained healthy.
-- The first load test reached only approximately 50% CPU and did not trigger the alarm. Increasing the controlled workload and allowing two complete metric periods produced the expected alarm transition, demonstrating the effect of metric aggregation and evaluation periods.
-
-## AWS deployment
-
-The manual AWS implementation and its verification steps are documented in [docs/aws-manual-deployment.md](docs/aws-manual-deployment.md).
-
-## Delivery roadmap
-
-```mermaid
-flowchart LR
-    Developer["Developer"] --> GitHub["GitHub repository"]
-    GitHub --> Actions["GitHub Actions<br/>CI implemented; CD planned"]
-    Actions -.->|"manual deployment today"| EC2["Amazon EC2<br/>implemented"]
-    EC2 --> RDS["Amazon RDS PostgreSQL<br/>implemented private database"]
-    EC2 --> CloudWatch["Amazon CloudWatch<br/>implemented logs and alarms"]
-    Terraform["Terraform<br/>planned after manual AWS deployment"] -.-> EC2
-    Terraform -.-> RDS
-```
-
-Planned stages include:
-
-1. GitHub Actions continuous delivery using AWS OpenID Connect
-2. Reproducible infrastructure with Terraform
-
-Kubernetes, EKS, Prometheus, Grafana, feature flags, and additional security scanning are later improvements, not current capabilities.
+The real `.env` file is excluded from Git and the Docker build context. Database passwords, AWS credentials, API keys, and tokens must not be committed.
